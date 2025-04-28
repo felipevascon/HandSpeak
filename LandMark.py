@@ -58,6 +58,8 @@ def fetch_images_and_letters():
     conn.close()
     return data
 
+os.makedirs("output_landmarked_images", exist_ok=True)
+
 # Cria arquivo CSV e escreve cabeçalho
 with open(OUTPUT_CSV, mode='w', newline='') as f:
     writer = csv.writer(f)
@@ -67,10 +69,10 @@ with open(OUTPUT_CSV, mode='w', newline='') as f:
     # Busca imagens e letras do banco de dados
     images_and_letters = fetch_images_and_letters()
 
-    for letter, image_url in images_and_letters:
+    for idx, (letter, image_url) in enumerate(images_and_letters):
         # Faz o download da imagem com timeout
         try:
-            response = requests.get(image_url, timeout=10)  # Timeout de 10 segundos
+            response = requests.get(image_url, timeout=10)
             if response.status_code != 200:
                 print(f"❌ Não foi possível baixar a imagem: {image_url} (Status: {response.status_code})")
                 continue
@@ -79,7 +81,7 @@ with open(OUTPUT_CSV, mode='w', newline='') as f:
             continue
 
         # Salva a imagem temporariamente
-        temp_image_path = f"temp_{letter}.jpg"
+        temp_image_path = f"temp_{letter}_{idx}.jpg"
         with open(temp_image_path, "wb") as img_file:
             img_file.write(response.content)
 
@@ -94,12 +96,8 @@ with open(OUTPUT_CSV, mode='w', newline='') as f:
             (size - width) // 2,
             (size - width + 1) // 2,
             cv2.BORDER_CONSTANT,
-            value=[0, 0, 0]  # Preenche com preto
+            value=[0, 0, 0]
         )
-
-        # Salva a imagem redimensionada temporariamente
-        temp_square_image_path = f"temp_square_{letter}.jpg"
-        cv2.imwrite(temp_square_image_path, square_image)
 
         # Carrega a imagem redimensionada no MediaPipe
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(square_image, cv2.COLOR_BGR2RGB))
@@ -107,14 +105,39 @@ with open(OUTPUT_CSV, mode='w', newline='') as f:
         # Detecta landmarks
         result = detector.detect(mp_image)
         if result.hand_landmarks:
-            hand = result.hand_landmarks[0]  # Usa a primeira mão detectada
+            hand = result.hand_landmarks[0]
             row = [letter]
             for landmark in hand:
                 row.extend([landmark.x, landmark.y, landmark.z])
             writer.writerow(row)
 
+            # Desenhar os landmarks na imagem
+            annotated_image = square_image.copy()
+            for landmark in hand:
+                x_px = int(landmark.x * size)
+                y_px = int(landmark.y * size)
+                cv2.circle(annotated_image, (x_px, y_px), 4, (0, 255, 0), -1)  # Pontinhos verdes
+
+            # Conectar pontos com linhas (opcional, se quiser deixar mais bonito)
+            # Para conectar corretamente, MediaPipe define uma conexão padrão:
+            connections = mp.solutions.hands.HAND_CONNECTIONS
+            for connection in connections:
+                start_idx = connection[0]
+                end_idx = connection[1]
+                start = hand[start_idx]
+                end = hand[end_idx]
+                start_point = (int(start.x * size), int(start.y * size))
+                end_point = (int(end.x * size), int(end.y * size))
+                cv2.line(annotated_image, start_point, end_point, (255, 0, 0), 2)  # Linhas azuis
+
+            # Salvar a imagem anotada
+            output_filename = os.path.join("output_landmarked_images", f"{letter}_{idx}_landmarked.jpg")
+            cv2.imwrite(output_filename, annotated_image)
+
+        else:
+            print(f"⚠️ Nenhuma mão detectada na imagem: {image_url}")
+
         # Remove as imagens temporárias
         os.remove(temp_image_path)
-        os.remove(temp_square_image_path)
 
-print("🚀 Processamento concluído e landmarks salvos no CSV.")
+print("🚀 Processamento concluído, landmarks salvos no CSV e imagens salvas com anotações.")
